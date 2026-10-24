@@ -1,0 +1,14 @@
+[project]
+name = "drone-manager-api"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "firebase-admin",
+    "python-dotenv",
+    "pydantic",
+]
+
+[tool.vercel]
+entrypoint = "backend.app.main:app"
