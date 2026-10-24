@@ -1,6 +1,6 @@
 (() => {
 'use strict';
-const API_BASE_URL = "drone-manager-api.vercel.app";
+const API_BASE_URL = "https://drone-manager-bgcijmwrh-shaik-fazalulla.vercel.app/";
 const API_KEY = 'dm_api_base_url';
 let apiBase = localStorage.getItem(API_KEY) || API_BASE_URL;
 let currentPage = 'dashboard';
