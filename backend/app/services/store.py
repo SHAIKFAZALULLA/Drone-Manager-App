@@ -1,11 +1,15 @@
-"""Firestore data access with a clear startup error when credentials are missing."""
+
+"""Firestore data access with file or environment-based credentials."""
+import json
 import os
 from functools import lru_cache
 from typing import Any
 from datetime import date, datetime
 
+
 class StoreError(RuntimeError):
     pass
+
 
 class FirestoreStore:
     def __init__(self):
@@ -17,22 +21,57 @@ class FirestoreStore:
         try:
             import firebase_admin
             from firebase_admin import credentials, firestore
-            from backend.app.config import FIREBASE_CREDENTIALS_PATH, FIREBASE_PROJECT_ID
-            if not os.path.exists(FIREBASE_CREDENTIALS_PATH):
+            from backend.app.config import (
+                FIREBASE_CREDENTIALS_PATH,
+                FIREBASE_PROJECT_ID,
+            )
+
+            # Prefer the secure deployment environment variable.
+            service_account_json = os.getenv(
+                "FIREBASE_SERVICE_ACCOUNT_JSON"
+            )
+
+            if service_account_json:
+                try:
+                    service_account_info = json.loads(service_account_json)
+                except json.JSONDecodeError:
+                    self._init_error = (
+                        "FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON."
+                    )
+                    return
+
+                cred = credentials.Certificate(service_account_info)
+
+            elif os.path.exists(FIREBASE_CREDENTIALS_PATH):
+                # Keep the existing local development workflow.
+                cred = credentials.Certificate(
+                    FIREBASE_CREDENTIALS_PATH
+                )
+            else:
                 self._init_error = (
-                    f"Firebase credentials file not found: {FIREBASE_CREDENTIALS_PATH}. "
-                    "Copy your Firebase Admin service-account JSON to the project root and configure .env."
+                    "Firebase credentials are missing. Configure "
+                    "FIREBASE_SERVICE_ACCOUNT_JSON in the deployment "
+                    "environment, or provide the local credentials file."
                 )
                 return
+
             try:
                 app = firebase_admin.get_app()
             except ValueError:
-                opts = {"projectId": FIREBASE_PROJECT_ID} if FIREBASE_PROJECT_ID else None
-                cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+                opts = (
+                    {"projectId": FIREBASE_PROJECT_ID}
+                    if FIREBASE_PROJECT_ID
+                    else None
+                )
                 app = firebase_admin.initialize_app(cred, opts)
+
             self._db = firestore.client(app=app)
+
         except Exception as exc:
-            self._init_error = f"Firebase initialization failed: {exc}"
+            # Do not include credentials or private-key contents in logs.
+            self._init_error = (
+                f"Firebase initialization failed ({type(exc).__name__})."
+            )
 
     @property
     def ready(self) -> bool:
@@ -48,12 +87,19 @@ class FirestoreStore:
 
     def list(self, collection: str) -> list[dict[str, Any]]:
         self._require()
-        return [self._serialize(d.to_dict() | {"id": d.id}) for d in self._db.collection(collection).stream()]
+        return [
+            self._serialize(d.to_dict() | {"id": d.id})
+            for d in self._db.collection(collection).stream()
+        ]
 
     def get(self, collection: str, item_id: str) -> dict[str, Any] | None:
         self._require()
         snap = self._db.collection(collection).document(item_id).get()
-        return self._serialize(snap.to_dict() | {"id": snap.id}) if snap.exists else None
+        return (
+            self._serialize(snap.to_dict() | {"id": snap.id})
+            if snap.exists
+            else None
+        )
 
     def create(self, collection: str, data: dict[str, Any]) -> dict[str, Any]:
         self._require()
@@ -64,7 +110,9 @@ class FirestoreStore:
         ref.set(payload)
         return self._serialize(payload | {"id": ref.id})
 
-    def update(self, collection: str, item_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    def update(
+        self, collection: str, item_id: str, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         self._require()
         ref = self._db.collection(collection).document(item_id)
         if not ref.get().exists:
@@ -85,7 +133,11 @@ class FirestoreStore:
 
     def _clean(self, value):
         if isinstance(value, dict):
-            return {k: self._clean(v) for k, v in value.items() if v is not None}
+            return {
+                k: self._clean(v)
+                for k, v in value.items()
+                if v is not None
+            }
         if isinstance(value, list):
             return [self._clean(v) for v in value]
         if isinstance(value, (date, datetime)):
@@ -100,6 +152,7 @@ class FirestoreStore:
         if hasattr(value, "isoformat"):
             return value.isoformat()
         return value
+
 
 @lru_cache(maxsize=1)
 def get_store() -> FirestoreStore:
